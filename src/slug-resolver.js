@@ -1,60 +1,66 @@
 const cheerio = require('cheerio');
 const { fetchOA } = require('./http');
 
-// Cache: title -> oaSlug
 const slugCache = new Map();
 
 /**
- * Znajdź slug OA dla tytułu anime.
- * Szuka na OA wyszukiwarce, bierze pierwszy wynik.
+ * Znajdź slug OA dla anime.
+ * OA używa japońskich tytułów jako slugów (np. "sousou-no-frieren").
+ * Dlatego szukamy najpierw po japońskim tytule, potem angielskim.
  */
-async function findOASlug(malId, title) {
+async function findOASlug(malId, titleJp, titleEn) {
   const cacheKey = String(malId);
   if (slugCache.has(cacheKey)) return slugCache.get(cacheKey);
 
-  // Oczyść tytuł - tylko pierwsze 3-4 słowa, bez "Season X", "Part X" itp.
-  const cleanTitle = title
-    .replace(/\s*(2nd|3rd|\d+th|second|third)\s+season.*/gi, '')
-    .replace(/\s*season\s+\d+.*/gi, '')
-    .replace(/\s*part\s+\d+.*/gi, '')
-    .replace(/[^a-zA-Z0-9\s]/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .split(' ')
-    .slice(0, 3)
-    .join(' ');
+  // Próbuj kilka wariantów wyszukiwania, od najbardziej konkretnego
+  const queries = [];
 
-  console.log(`[slug-resolver] Searching OA for: "${cleanTitle}" (MAL ${malId})`);
-
-  try {
-    const html = await fetchOA(`/search/name/${encodeURIComponent(cleanTitle)}`);
-    const $ = cheerio.load(html);
-
-    let foundSlug = null;
-    $('a[href^="/anime/"]').each((i, el) => {
-      if (foundSlug) return;
-      const href = $(el).attr('href') || '';
-      const match = href.match(/^\/anime\/([^\/]+)\/?$/);
-      if (match && match[1]) foundSlug = match[1];
-    });
-
-    if (foundSlug) {
-      slugCache.set(cacheKey, foundSlug);
-      console.log(`[slug-resolver] MAL ${malId} → OA slug: "${foundSlug}"`);
-      return foundSlug;
-    }
-  } catch (e) {
-    console.error(`[slug-resolver] Search failed: ${e.message}`);
+  // 1. Japoński tytuł (pierwsze 3 słowa) – OA zazwyczaj używa tego jako slug
+  if (titleJp) {
+    const jpShort = titleJp.split(' ').slice(0, 3).join(' ');
+    queries.push(jpShort);
+    // Też pełny japoński
+    if (titleJp !== jpShort) queries.push(titleJp);
   }
 
-  // Fallback: kebab-case z tytułu angielskiego
-  const fallback = title
+  // 2. Angielski tytuł (pierwsze 2 słowa) – fallback
+  if (titleEn && titleEn !== titleJp) {
+    queries.push(titleEn.split(' ').slice(0, 2).join(' '));
+  }
+
+  for (const query of queries) {
+    console.log(`[slug-resolver] Searching OA: "${query}" (MAL ${malId})`);
+    try {
+      const html = await fetchOA(`/search/name/${encodeURIComponent(query)}`);
+      const $ = cheerio.load(html);
+
+      // Wyciągnij slugi z wyników wyszukiwania
+      let foundSlug = null;
+      $('a[href^="/anime/"]').each((i, el) => {
+        if (foundSlug) return;
+        const href = $(el).attr('href') || '';
+        const match = href.match(/^\/anime\/([^\/]+)\/?$/);
+        if (match && match[1]) foundSlug = match[1];
+      });
+
+      if (foundSlug) {
+        slugCache.set(cacheKey, foundSlug);
+        console.log(`[slug-resolver] MAL ${malId} → OA slug: "${foundSlug}"`);
+        return foundSlug;
+      }
+    } catch (e) {
+      console.error(`[slug-resolver] Query "${query}" failed: ${e.message}`);
+    }
+  }
+
+  // Ostateczny fallback: kebab z japońskiego tytułu (tak jak OA to robi)
+  const base = (titleJp || titleEn || `anime-${malId}`)
     .toLowerCase()
     .replace(/[^a-z0-9\s]/g, '')
     .trim()
     .replace(/\s+/g, '-');
-  console.warn(`[slug-resolver] Fallback slug: "${fallback}"`);
-  return fallback;
+  console.warn(`[slug-resolver] Fallback slug: "${base}"`);
+  return base;
 }
 
 module.exports = { findOASlug };
