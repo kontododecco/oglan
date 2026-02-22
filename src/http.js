@@ -17,29 +17,29 @@ const BROWSER_HEADERS = {
   'Sec-Fetch-Site': 'none',
   'Sec-Fetch-User': '?1',
   'Cache-Control': 'max-age=0',
-  'Referer': 'https://www.google.com/'
 };
 
-/**
- * Pobierz stronę ogladajanime.pl.
- *
- * Vercel IP jest zablokowane przez OA (403).
- * Rozwiązanie: ScraperAPI jako proxy rotujące IP.
- *
- * Jeśli zmienna SCRAPER_API_KEY jest ustawiona – używa ScraperAPI.
- * Bez klucza działa tylko lokalnie (twoje IP nie jest blokowane).
- */
 async function fetchOA(path) {
   const url = path.startsWith('http') ? path : `${BASE_URL}${path}`;
   const scraperKey = process.env.SCRAPER_API_KEY;
 
   if (scraperKey) {
+    // ScraperAPI: render=false bo strona jest SSR, country_code=pl dla polskiego IP
     const scraperUrl = `http://api.scraperapi.com?api_key=${scraperKey}&url=${encodeURIComponent(url)}&render=false&country_code=pl`;
+    console.log(`[fetchOA] ScraperAPI → ${url}`);
     const { data } = await axios.get(scraperUrl, { timeout: 30000 });
+
+    // Debug: log fragment HTML żeby widzieć co dostajemy
+    if (typeof data === 'string') {
+      const preview = data.replace(/\s+/g, ' ').substring(0, 300);
+      console.log(`[fetchOA] HTML preview (${data.length} chars): ${preview}`);
+    }
+
     return data;
   }
 
-  // Bezpośredni request – działa lokalnie, blokowany na Vercel
+  // Bez ScraperAPI: bezpośredni request (tylko lokalnie)
+  console.log(`[fetchOA] Direct → ${url}`);
   const { data } = await axios.get(url, {
     headers: BROWSER_HEADERS,
     timeout: 15000
