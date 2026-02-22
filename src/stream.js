@@ -44,21 +44,30 @@ async function getEmbedsFromEpisodePage(slug, episode) {
   const embeds = [];
   const seen = new Set();
 
+  // Domeny które są hostingami wideo
+  const VIDEO_HOSTS = /vk\.com|vkvideo\.ru|vidoza|ebd\.cda\.pl|cda\.pl\/video|mp4upload|sibnet|doodstream|dood\.|streamtape|voe\.sx|filemoon|youtube\.com\/embed|youtu\.be/;
+
   const addEmbed = (url, label) => {
     if (!url || seen.has(url)) return;
+    // Ignoruj obrazki, awatary, reklamy, CDN OA
+    if (url.includes('cdn.ogladajanime.pl')) return;
+    if (url.includes('ogladajanime.pl') && !url.includes('watchepisode')) return;
+    if (url.match(/\.(webp|jpg|jpeg|png|gif|svg|ico)(\?|$)/i)) return;
+    if (url.includes('usersync') || url.includes('adnxs') || url.includes('onetag') || url.includes('admatic') || url.includes('a-mo.net')) return;
     seen.add(url);
     embeds.push({ url, label: label || 'Player' });
   };
 
-  // 1. iframe z zewnętrznym playerem (po wykonaniu JS powinny być widoczne)
+  // 1. iframe TYLKO z hostingów wideo
   $('iframe[src]').each((i, el) => {
     const src = $(el).attr('src') || '';
-    if (src && !src.includes('ogladajanime')) {
-      addEmbed(src.startsWith('//') ? 'https:' + src : src, `Player ${embeds.length + 1}`);
+    const fullSrc = src.startsWith('//') ? 'https:' + src : src;
+    if (fullSrc && VIDEO_HOSTS.test(fullSrc)) {
+      addEmbed(fullSrc, `Player ${embeds.length + 1}`);
     }
   });
 
-  // 2. Linki watchepisode (dla fallbacku bez render)
+  // 2. Linki watchepisode
   $('a[href*="watchepisode="]').each((i, el) => {
     const href = $(el).attr('href') || '';
     const m = href.match(/watchepisode=(\d+)/);
@@ -69,22 +78,13 @@ async function getEmbedsFromEpisodePage(slug, episode) {
     }
   });
 
-  // 3. data-src, data-url na elementach
-  $('[data-src], [data-url], [data-file]').each((i, el) => {
-    const src = $(el).attr('data-src') || $(el).attr('data-url') || $(el).attr('data-file') || '';
-    if (src && src.startsWith('http')) addEmbed(src, `Player ${embeds.length + 1}`);
-  });
-
-  // 4. Szukaj URL-i hostingów bezpośrednio w skryptach
+  // 3. Szukaj URL-i hostingów TYLKO w skryptach (nie w img src)
   $('script').each((i, el) => {
     const content = $(el).html() || '';
     const patterns = [
-      // VK
-      /(https?:\/\/(?:vk\.com|vkvideo\.ru)\/video_ext\.php\?[^"'\s]+)/g,
-      // Inne hostingi
-      /(https?:\/\/(?:vidoza|ebd\.cda|mp4upload|sibnet|doodstream|dood\.|streamtape|voe\.sx|filemoon)[^"'\s]+)/g,
-      // Bezpośrednie MP4
-      /(https?:\/\/[^"'\s]+\.mp4[^"'\s]{0,50})/g,
+      /(https?:\/\/(?:vk\.com|vkvideo\.ru)\/video_ext\.php\?[^"'\s<>]+)/g,
+      /(https?:\/\/(?:vidoza\.net|ebd\.cda\.pl|mp4upload\.com|video\.sibnet\.ru|doodstream\.com|streamtape\.com|voe\.sx|filemoon\.sx)[^"'\s<>]+)/g,
+      /(https?:\/\/[^"'\s<>]+\.mp4[^"'\s<>]{0,100})/g,
     ];
     for (const pattern of patterns) {
       let m;

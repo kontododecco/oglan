@@ -32,7 +32,10 @@ async function fetchOA(path, { render = false } = {}) {
       keep_headers: 'true',
     });
     // render=true wykonuje JavaScript na stronie (kosztuje 10x requestów)
-    if (render) params.set('render', 'true');
+    if (render) {
+      params.set("render", "true");
+      params.set("wait", "8000");
+    }
 
     const scraperUrl = `http://api.scraperapi.com?${params.toString()}`;
     console.log(`[fetchOA] ScraperAPI${render ? ' (render=true)' : ''} → ${url}`);
