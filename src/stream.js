@@ -44,44 +44,49 @@ async function getEmbedsFromEpisodePage(slug, episode) {
   const embeds = [];
   const seen = new Set();
 
-  // Domeny które są hostingami wideo
-  const VIDEO_HOSTS = /vk\.com|vkvideo\.ru|vidoza|ebd\.cda\.pl|cda\.pl\/video|mp4upload|sibnet|doodstream|dood\.|streamtape|voe\.sx|filemoon|youtube\.com\/embed|youtu\.be/;
-
   const addEmbed = (url, label) => {
-    if (!url || seen.has(url)) return;
-    // Ignoruj obrazki, awatary, reklamy, CDN OA
-    if (url.includes('cdn.ogladajanime.pl')) return;
-    if (url.includes('ogladajanime.pl') && !url.includes('watchepisode')) return;
-    if (url.match(/\.(webp|jpg|jpeg|png|gif|svg|ico)(\?|$)/i)) return;
-    if (url.includes('usersync') || url.includes('adnxs') || url.includes('onetag') || url.includes('admatic') || url.includes('a-mo.net')) return;
+    if (!url || url === 'about:blank' || seen.has(url)) return;
     seen.add(url);
     embeds.push({ url, label: label || 'Player' });
   };
 
-  // 1. iframe TYLKO z hostingów wideo
+  // 1. Główny iframe playera OA (#playerFrame) – wypełniany przez JS po kliknięciu
+  const playerFrame = $('#playerFrame');
+  const playerSrc = playerFrame.attr('src') || '';
+  if (playerSrc && playerSrc !== 'about:blank') {
+    const fullSrc = playerSrc.startsWith('//') ? 'https:' + playerSrc : playerSrc;
+    addEmbed(fullSrc, 'VK Player');
+  }
+
+  // 2. Video.js player (#newPlayer) – może mieć src bezpośrednio
+  const newPlayer = $('#newPlayer');
+  const videoSrc = newPlayer.attr('src') || newPlayer.find('source').attr('src') || '';
+  if (videoSrc) addEmbed(videoSrc, 'Direct');
+
+  // data-setup na video.js
+  const dataSetup = newPlayer.attr('data-setup') || '';
+  if (dataSetup) {
+    try {
+      const setup = JSON.parse(dataSetup);
+      const src = setup.sources?.[0]?.src || setup.src || '';
+      if (src) addEmbed(src, 'Direct');
+    } catch (e) {}
+  }
+
+  // 3. Wszystkie inne iframe z zewnętrznych hostingów (fallback)
+  const VIDEO_HOSTS = /vk\.com|vkvideo\.ru|vidoza|ebd\.cda\.pl|cda\.pl\/video|mp4upload|sibnet|doodstream|dood\.|streamtape|voe\.sx|filemoon|youtube\.com\/embed/;
   $('iframe[src]').each((i, el) => {
     const src = $(el).attr('src') || '';
     const fullSrc = src.startsWith('//') ? 'https:' + src : src;
-    if (fullSrc && VIDEO_HOSTS.test(fullSrc)) {
-      addEmbed(fullSrc, `Player ${embeds.length + 1}`);
-    }
+    if (fullSrc && VIDEO_HOSTS.test(fullSrc)) addEmbed(fullSrc, `Player ${embeds.length + 1}`);
   });
 
-  // 2. Linki watchepisode
-  $('a[href*="watchepisode="]').each((i, el) => {
-    const href = $(el).attr('href') || '';
-    const m = href.match(/watchepisode=(\d+)/);
-    const idM = href.match(/[&?]id=(\d+)/);
-    if (m && idM) {
-      const playerUrl = `${BASE_URL}/?action=anime&id=${idM[1]}&watchepisode=${m[1]}&subaction=player`;
-      addEmbed(playerUrl, $(el).text().trim() || `Player ${embeds.length + 1}`);
-    }
-  });
-
-  // 3. Szukaj URL-i hostingów TYLKO w skryptach (nie w img src)
+  // 4. Skrypty – szukaj VK URL i innych hostingów
   $('script').each((i, el) => {
     const content = $(el).html() || '';
+    if (!content.includes('vk.com') && !content.includes('vidoza') && !content.includes('cda') && !content.match(/\.mp4/)) return;
     const patterns = [
+      /(https?:\\?\/\\?\/(?:vk\.com|vkvideo\.ru)\\?\/video_ext\.php\?[^"'\s<>\\]+)/g,
       /(https?:\/\/(?:vk\.com|vkvideo\.ru)\/video_ext\.php\?[^"'\s<>]+)/g,
       /(https?:\/\/(?:vidoza\.net|ebd\.cda\.pl|mp4upload\.com|video\.sibnet\.ru|doodstream\.com|streamtape\.com|voe\.sx|filemoon\.sx)[^"'\s<>]+)/g,
       /(https?:\/\/[^"'\s<>]+\.mp4[^"'\s<>]{0,100})/g,
@@ -89,7 +94,8 @@ async function getEmbedsFromEpisodePage(slug, episode) {
     for (const pattern of patterns) {
       let m;
       while ((m = pattern.exec(content)) !== null) {
-        addEmbed(m[1], `Player ${embeds.length + 1}`);
+        const url = m[1].replace(/\\\//g, '/');
+        addEmbed(url, `Script Player`);
       }
     }
   });

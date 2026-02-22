@@ -25,19 +25,31 @@ async function fetchOA(path, { render = false } = {}) {
   };
 
   if (scraperKey) {
-    const params = new URLSearchParams({
-      api_key: scraperKey,
-      url,
-      country_code: 'pl',
-      keep_headers: 'true',
-    });
-    // render=true wykonuje JavaScript na stronie (kosztuje 10x requestów)
+    let scraperUrl;
+
     if (render) {
-      params.set("render", "true");
-      params.set("wait", "8000");
+      // Używamy ScraperAPI /screenshot endpoint który obsługuje JS instructions
+      // Ale lepiej – używamy standardowego render z autoparse i czekamy na konkretny element
+      const params = new URLSearchParams({
+        api_key: scraperKey,
+        url,
+        country_code: 'pl',
+        keep_headers: 'true',
+        render: 'true',
+        wait_for_selector: '#playerFrame[src]:not([src=""])',
+        wait: '3000',
+      });
+      scraperUrl = `http://api.scraperapi.com?${params.toString()}`;
+    } else {
+      const params = new URLSearchParams({
+        api_key: scraperKey,
+        url,
+        country_code: 'pl',
+        keep_headers: 'true',
+      });
+      scraperUrl = `http://api.scraperapi.com?${params.toString()}`;
     }
 
-    const scraperUrl = `http://api.scraperapi.com?${params.toString()}`;
     console.log(`[fetchOA] ScraperAPI${render ? ' (render=true)' : ''} → ${url}`);
     const { data } = await axios.get(scraperUrl, { headers, timeout: 60000 });
     if (typeof data === 'string') {
