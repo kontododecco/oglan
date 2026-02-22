@@ -1,59 +1,53 @@
 # 🎌 OgladajAnime.pl – Stremio Addon
 
-## ⚙️ Zmienne środowiskowe (Vercel → Settings → Environment Variables)
+## 🚀 Deploy na Railway.app (zalecane)
 
-| Zmienna | Opis | Wymagana? |
-|---------|------|-----------|
-| `SCRAPER_API_KEY` | Klucz z scraperapi.com | ✅ Tak |
-| `OA_SESSION_COOKIE` | Cookie sesji z ogladajanime.pl | ✅ Tak |
+Railway uruchamia prawdziwą przeglądarkę Chrome (Puppeteer) która potrafi obsłużyć JavaScript OA.
 
----
-
-## 🍪 Jak zdobyć OA_SESSION_COOKIE (3 minuty)
-
-OA wymaga zalogowania żeby oglądać odcinki. Zamiast przekazywać login/hasło
-(które byłyby blokowane przez Vercel), kopiujesz cookie sesji z przeglądarki:
-
-**Krok 1:** Zaloguj się na [ogladajanime.pl](https://ogladajanime.pl) w przeglądarce
-
-**Krok 2:** Naciśnij **F12** → zakładka **Application** (Chrome) lub **Storage** (Firefox)
-
-**Krok 3:** W lewym panelu: **Cookies** → **https://ogladajanime.pl**
-
-**Krok 4:** Znajdź i skopiuj wartości tych cookies (kliknij w nazwę, skopiuj pole "Value"):
-- `dle_user_id` – np. `12345`
-- `dle_password` – np. `abc123def456...` (długi hash)
-
-**Krok 5:** Złóż je w jeden string w formacie:
-```
-dle_user_id=12345; dle_password=abc123def456...
-```
-
-**Krok 6:** Wklej jako wartość zmiennej `OA_SESSION_COOKIE` na Vercel
-
-> 💡 **Uwaga:** Cookie wygasa po pewnym czasie (zwykle kilka tygodni/miesięcy).
-> Jeśli addon przestanie działać – powtórz kroki 2-6.
-
----
-
-## 🚀 Deploy na Vercel
-
+### Krok 1: Utwórz repozytorium GitHub
 ```bash
 git init && git add . && git commit -m "init"
-git remote add origin https://github.com/TWOJA/repo.git
+# Utwórz repo na github.com i wgraj:
+git remote add origin https://github.com/TWOJE/repo.git
 git push -u origin main
-# vercel.com → New Project → wybierz repo → Deploy
-# Dodaj obie zmienne → Redeploy
 ```
 
-Po deployu wejdź na URL projektu i kliknij "Zainstaluj w Stremio".
+### Krok 2: Deploy na Railway
+1. Wejdź na [railway.app](https://railway.app) → zaloguj się przez GitHub
+2. **New Project → Deploy from GitHub repo** → wybierz swoje repo
+3. Railway automatycznie wykryje Dockerfile i zbuduje projekt
 
-## 💻 Lokalnie (bez ScraperAPI)
+### Krok 3: Dodaj zmienne środowiskowe
+Railway → twój projekt → **Variables**:
+
+| Zmienna | Opis |
+|---------|------|
+| `OA_SESSION_COOKIE` | `accepted=1; cf_clearance=XXX; PHPSESSID=XXX; user_id=XXX; user_key=XXX` |
+| `PORT` | `7000` |
+
+### Krok 4: Zainstaluj w Stremio
+Po deployu Railway da ci URL (np. `https://twoj-addon.up.railway.app`).
+Wejdź na ten URL → kliknij "Zainstaluj w Stremio".
+
+---
+
+## 🍪 Jak skopiować OA_SESSION_COOKIE
+
+1. Zaloguj się na ogladajanime.pl w Firefox
+2. **F12 → Storage → Cookies → https://ogladajanime.pl**
+3. Skopiuj wartości: `accepted`, `cf_clearance`, `PHPSESSID`, `user_id`, `user_key`
+4. Złóż w jeden string:
+```
+accepted=1; cf_clearance=WARTOŚĆ; PHPSESSID=WARTOŚĆ; user_id=WARTOŚĆ; user_key=WARTOŚĆ
+```
+
+> Cookie wygasa co kilka tygodni – jeśli addon przestanie działać, odśwież cookie.
+
+---
+
+## 💻 Lokalnie
 
 ```bash
-# Plik .env w katalogu projektu:
-OA_SESSION_COOKIE=dle_user_id=XXX; dle_password=YYY
-
-npm install && npm start
+OA_SESSION_COOKIE="..." npm start
 # http://localhost:7000
 ```
