@@ -5,61 +5,77 @@ const { findOASlug } = require('./slug-resolver');
 
 const JIKAN = 'https://api.jikan.moe/v4';
 
-async function metaHandler({ type, id }) {
-  // id format: "oa:MAL_ID"  np. "oa:52991"
-  const malId = id.replace('oa:', '');
+// Rozpoznaj czy ID to MAL number czy stary slug
+function parseid(id) {
+  const raw = id.replace('oa:', '');
+  // Nowy format: liczba (MAL ID)
+  if (/^\d+$/.test(raw)) return { type: 'mal', malId: raw };
+  // Stary format: slug (np. "frieren-beyond-journeys-end")
+  return { type: 'slug', slug: raw };
+}
 
-  // 1. Pobierz pełne dane z Jikan
+async function metaHandler({ type, id }) {
+  const parsed = parseid(id);
   let anime = null;
-  try {
-    const { data } = await axios.get(`${JIKAN}/anime/${malId}`, { timeout: 10000 });
-    anime = data.data;
-  } catch (e) {
-    console.error(`Jikan fetch failed for MAL ${malId}: ${e.message}`);
+  let malId = null;
+
+  if (parsed.type === 'mal') {
+    // Nowy format – pobierz z Jikan po MAL ID
+    malId = parsed.malId;
+    try {
+      const { data } = await axios.get(`${JIKAN}/anime/${malId}`, { timeout: 10000 });
+      anime = data.data;
+    } catch (e) {
+      console.error(`Jikan fetch failed for MAL ${malId}: ${e.message}`);
+    }
+  } else {
+    // Stary format (slug) – wyszukaj w Jikan po tytule
+    const titleQuery = parsed.slug.replace(/-/g, ' ');
+    try {
+      const { data } = await axios.get(`${JIKAN}/anime`, {
+        params: { q: titleQuery, limit: 1, sfw: false },
+        timeout: 10000
+      });
+      anime = data.data?.[0] || null;
+      malId = anime?.mal_id ? String(anime.mal_id) : parsed.slug;
+    } catch (e) {
+      console.error(`Jikan search failed for "${titleQuery}": ${e.message}`);
+      malId = parsed.slug;
+    }
   }
 
-  const title = anime?.title_english || anime?.title || `Anime ${malId}`;
+  const title = anime?.title_english || anime?.title || parsed.slug?.replace(/-/g, ' ') || `Anime ${malId}`;
 
-  // 2. Znajdź slug OA przez wyszukiwarkę
+  // Znajdź slug OA
   const slug = await findOASlug(malId, title);
 
-  // 3. Pobierz listę odcinków ze strony anime na OA
+  // Pobierz listę odcinków ze strony OA
   let epNumbers = [];
   try {
     const html = await fetchOA(`/anime/${slug}`);
     const $ = cheerio.load(html);
-
     const seen = new Set();
     $(`a[href^="/anime/${slug}/"]`).each((i, el) => {
       const href = $(el).attr('href') || '';
       const m = href.match(/\/anime\/.+?\/(\d+)$/);
       if (m) seen.add(parseInt(m[1]));
     });
-
-    // Sprawdź czy strona rzeczywiście zawiera dane anime (nie redirect na główną)
-    // Jeśli brak linków do odcinków ale strona ma "Ładowanie..." to może być redirect
-    if (seen.size === 0) {
-      // Sprawdź czy tytuł na stronie pasuje
-      const pageTitle = $('h1, .anime-title, title').first().text().toLowerCase();
-      if (!pageTitle.includes(slug.split('-')[0])) {
-        console.warn(`[meta] Possible redirect for slug "${slug}", got page: "${pageTitle.substring(0, 50)}"`);
-      }
-    }
-
     epNumbers = Array.from(seen).sort((a, b) => a - b);
+    console.log(`[meta] Found ${epNumbers.length} episodes for slug "${slug}"`);
   } catch (e) {
-    console.error(`OA episode fetch failed for slug "${slug}": ${e.message}`);
+    console.error(`[meta] OA episode fetch failed for "${slug}": ${e.message}`);
   }
 
-  // Fallback: użyj liczby odcinków z Jikan
+  // Fallback z Jikan
   if (epNumbers.length === 0 && anime?.episodes > 0) {
     epNumbers = Array.from({ length: anime.episodes }, (_, i) => i + 1);
+    console.log(`[meta] Using Jikan episode count: ${anime.episodes}`);
   }
   if (epNumbers.length === 0) epNumbers = [1];
 
-  // Zapisz slug w ID odcinka: oa:MAL_ID:SLUG:EP
+  // ID odcinka: oa:MALID:SLUG:EP
   const videos = epNumbers.map(ep => ({
-    id: `${id}:${slug}:${ep}`,
+    id: `oa:${malId}:${slug}:${ep}`,
     title: `Odcinek ${ep}`,
     season: 1,
     episode: ep,

@@ -1,58 +1,59 @@
 const cheerio = require('cheerio');
-const { fetchOA, BASE_URL } = require('./http');
+const { fetchOA } = require('./http');
 
-// Cache slug -> MAL_ID i odwrotnie (in-memory, resetuje się przy restarcie)
-const slugCache = new Map(); // malId -> slug
+// Cache: title -> oaSlug
+const slugCache = new Map();
 
 /**
- * Znajdź slug OA dla danego tytułu anime.
- * Szukamy na OA przez wyszukiwarkę, dopasowujemy pierwszy wynik.
+ * Znajdź slug OA dla tytułu anime.
+ * Szuka na OA wyszukiwarce, bierze pierwszy wynik.
  */
 async function findOASlug(malId, title) {
-  // Sprawdź cache
-  if (slugCache.has(malId)) {
-    return slugCache.get(malId);
-  }
+  const cacheKey = String(malId);
+  if (slugCache.has(cacheKey)) return slugCache.get(cacheKey);
 
-  // Oczyść tytuł z nadmiaru słów dla lepszego wyszukiwania
-  const searchQuery = title
-    .replace(/\s*(Season \d+|Part \d+|\d+nd Season|\d+rd Season|\d+th Season|2nd Season|3rd Season)\s*/gi, ' ')
+  // Oczyść tytuł - tylko pierwsze 3-4 słowa, bez "Season X", "Part X" itp.
+  const cleanTitle = title
+    .replace(/\s*(2nd|3rd|\d+th|second|third)\s+season.*/gi, '')
+    .replace(/\s*season\s+\d+.*/gi, '')
+    .replace(/\s*part\s+\d+.*/gi, '')
+    .replace(/[^a-zA-Z0-9\s]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim()
     .split(' ')
-    .slice(0, 4)
+    .slice(0, 3)
     .join(' ');
 
+  console.log(`[slug-resolver] Searching OA for: "${cleanTitle}" (MAL ${malId})`);
+
   try {
-    const html = await fetchOA(`/search/name/${encodeURIComponent(searchQuery)}`);
+    const html = await fetchOA(`/search/name/${encodeURIComponent(cleanTitle)}`);
     const $ = cheerio.load(html);
 
-    // Wyciągnij pierwszy slug z wyników wyszukiwania
     let foundSlug = null;
     $('a[href^="/anime/"]').each((i, el) => {
+      if (foundSlug) return;
       const href = $(el).attr('href') || '';
       const match = href.match(/^\/anime\/([^\/]+)\/?$/);
-      if (match && !foundSlug) {
-        foundSlug = match[1];
-      }
+      if (match && match[1]) foundSlug = match[1];
     });
 
     if (foundSlug) {
-      slugCache.set(malId, foundSlug);
-      console.log(`[slug-resolver] MAL ${malId} "${title}" → OA slug: "${foundSlug}"`);
+      slugCache.set(cacheKey, foundSlug);
+      console.log(`[slug-resolver] MAL ${malId} → OA slug: "${foundSlug}"`);
       return foundSlug;
     }
   } catch (e) {
-    console.error(`[slug-resolver] Search failed for "${title}": ${e.message}`);
+    console.error(`[slug-resolver] Search failed: ${e.message}`);
   }
 
-  // Fallback: spróbuj wygenerować slug z tytułu (angielski → kebab-case)
+  // Fallback: kebab-case z tytułu angielskiego
   const fallback = title
     .toLowerCase()
-    .replace(/[^a-z0-9\s-]/g, '')
+    .replace(/[^a-z0-9\s]/g, '')
     .trim()
     .replace(/\s+/g, '-');
-  console.warn(`[slug-resolver] Using fallback slug for "${title}": "${fallback}"`);
+  console.warn(`[slug-resolver] Fallback slug: "${fallback}"`);
   return fallback;
 }
 
