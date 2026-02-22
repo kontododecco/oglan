@@ -94,6 +94,17 @@ async function getEmbedsFromEpisodePage(slug, episode) {
     }
   });
 
+  // Debug: pokaż fragmenty HTML zawierające VK lub video
+  if (embeds.length === 0) {
+    const rawHtml = html.replace(/\s+/g, ' ');
+    const vkIdx = rawHtml.toLowerCase().indexOf('vk.com');
+    const videoIdx = rawHtml.toLowerCase().indexOf('video_ext');
+    const iframeIdx = rawHtml.toLowerCase().indexOf('iframe');
+    console.log(`[stream] DEBUG vk.com pos: ${vkIdx}, video_ext pos: ${videoIdx}, iframe pos: ${iframeIdx}`);
+    if (vkIdx > -1) console.log(`[stream] VK context: ${rawHtml.substring(Math.max(0, vkIdx-50), vkIdx+200)}`);
+    if (iframeIdx > -1) console.log(`[stream] iframe context: ${rawHtml.substring(iframeIdx, iframeIdx+300)}`);
+  }
+
   console.log(`[stream] Found ${embeds.length} embeds for ${slug}/${episode}`);
   embeds.forEach(e => console.log(`[stream]  → ${e.url.substring(0, 100)}`));
   return embeds;
