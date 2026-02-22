@@ -21,7 +21,7 @@ async function getBrowser() {
   });
 
   browserInstance.on('disconnected', () => {
-    console.log('[browser] Chrome rozłączony, zresetuję przy następnym użyciu');
+    console.log('[browser] Chrome rozłączony');
     browserInstance = null;
   });
 
@@ -29,12 +29,7 @@ async function getBrowser() {
   return browserInstance;
 }
 
-/**
- * Pobierz HTML strony przez Puppeteer z cookie sesji OA.
- * Opcja clickSelector: CSS selector elementu do kliknięcia przed zwróceniem HTML.
- * Opcja waitFor: selektor na który czekamy po kliknięciu.
- */
-async function fetchWithBrowser(url, { clickSelector, waitFor, timeout = 20000 } = {}) {
+async function fetchWithBrowser(url, { timeout = 25000 } = {}) {
   const browser = await getBrowser();
   const page = await browser.newPage();
 
@@ -49,20 +44,18 @@ async function fetchWithBrowser(url, { clickSelector, waitFor, timeout = 20000 }
       await page.setCookie(...cookies);
     }
 
-    // Blokuj reklamy i zasoby których nie potrzebujemy
+    // Blokuj niepotrzebne zasoby + loguj XHR
     await page.setRequestInterception(true);
     const capturedRequests = [];
     page.on('request', req => {
       const type = req.resourceType();
       const reqUrl = req.url();
-      // Przepuść dokumenty i XHR, blokuj obrazki/czcionki/reklamy
       if (['image', 'font', 'media'].includes(type)) {
         req.abort();
       } else if (reqUrl.includes('google-analytics') || reqUrl.includes('doubleclick') || reqUrl.includes('adnxs')) {
         req.abort();
       } else {
-        // Loguj XHR żebyśmy wiedzieli jakie AJAX requesty robi OA
-        if (type === 'xhr' || type === 'fetch') {
+        if ((type === 'xhr' || type === 'fetch') && !reqUrl.includes('cdn-cgi') && !reqUrl.includes('cloudflare')) {
           capturedRequests.push(reqUrl);
           console.log(`[browser] XHR: ${reqUrl}`);
         }
@@ -75,28 +68,62 @@ async function fetchWithBrowser(url, { clickSelector, waitFor, timeout = 20000 }
     console.log(`[browser] Otwieram: ${url}`);
     await page.goto(url, { waitUntil: 'networkidle2', timeout });
 
-    const loggedIn = !(await page.content()).includes('Zaloguj się aby uzyskać dostęp');
+    const initialHtml = await page.content();
+    const loggedIn = !initialHtml.includes('Zaloguj się aby uzyskać dostęp');
     console.log(`[browser] Zalogowany: ${loggedIn}`);
 
-    // Kliknij element jeśli podano selektor
-    if (clickSelector) {
-      console.log(`[browser] Klikam: ${clickSelector}`);
-      try {
-        await page.waitForSelector(clickSelector, { timeout: 5000 });
-        await page.click(clickSelector);
-        if (waitFor) {
-          await page.waitForSelector(waitFor, { timeout: 10000 });
-        } else {
-          await new Promise(r => setTimeout(r, 3000));
+    // Debug: zbadaj strukturę DOM żeby znaleźć listę odcinków i player
+    const domInfo = await page.evaluate(() => {
+      const info = {};
+
+      // Szukaj listy odcinków
+      const epSelectors = ['ul li', '.episode', '[class*="ep"]', '[class*="odcin"]'];
+      for (const sel of epSelectors) {
+        const els = document.querySelectorAll(sel);
+        if (els.length > 0 && els.length < 50) {
+          const first = els[0];
+          info.episodeSelector = sel;
+          info.episodeCount = els.length;
+          info.firstEpisodeHtml = first.outerHTML.substring(0, 200);
+          info.firstEpisodeOnclick = first.getAttribute('onclick') || first.querySelector('[onclick]')?.getAttribute('onclick') || '';
+          break;
         }
-      } catch (e) {
-        console.warn(`[browser] Kliknięcie nieudane: ${e.message}`);
       }
-    }
+
+      // playerFrame
+      const pf = document.getElementById('playerFrame');
+      info.playerFrameSrc = pf ? (pf.src || pf.getAttribute('src') || 'pusty') : 'brak elementu';
+      info.playerFrameClass = pf ? pf.className : '';
+
+      // newPlayer
+      const np = document.getElementById('newPlayer');
+      info.newPlayerSrc = np ? (np.src || 'pusty') : 'brak elementu';
+
+      // Znajdź wszystkie elementy z onclick które mogą być przyciskami playera
+      const onclickEls = Array.from(document.querySelectorAll('[onclick]'))
+        .filter(el => el.getAttribute('onclick').includes('player') || el.getAttribute('onclick').includes('episode') || el.getAttribute('onclick').includes('watch'))
+        .slice(0, 3)
+        .map(el => ({ tag: el.tagName, onclick: el.getAttribute('onclick'), html: el.outerHTML.substring(0, 150) }));
+      info.onclickElements = onclickEls;
+
+      // Szukaj skryptów z logiką playera
+      const scripts = Array.from(document.scripts);
+      for (const s of scripts) {
+        const c = s.textContent || '';
+        if (c.includes('playerFrame') || c.includes('watchepisode') || (c.includes('player') && c.includes('src'))) {
+          info.playerScript = c.substring(0, 600);
+          break;
+        }
+      }
+
+      return info;
+    });
+
+    console.log(`[browser] DOM info: ${JSON.stringify(domInfo, null, 2)}`);
 
     const html = await page.content();
-    console.log(`[browser] HTML: ${html.length} chars, XHR requests: ${capturedRequests.length}`);
-    return { html, xhrRequests: capturedRequests };
+    console.log(`[browser] HTML: ${html.length} chars, OA XHR: ${capturedRequests.length}`);
+    return { html, xhrRequests: capturedRequests, domInfo };
   } finally {
     await page.close();
   }
