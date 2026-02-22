@@ -2,7 +2,6 @@ const axios = require('axios');
 
 const BASE_URL = 'https://ogladajanime.pl';
 
-// Nagłówki maksymalnie imitujące prawdziwą przeglądarkę
 const BROWSER_HEADERS = {
   'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
   'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
@@ -21,26 +20,37 @@ const BROWSER_HEADERS = {
   'Referer': 'https://www.google.com/'
 };
 
+/**
+ * Pobierz stronę ogladajanime.pl.
+ *
+ * Vercel IP jest zablokowane przez OA (403).
+ * Rozwiązanie: ScraperAPI jako proxy rotujące IP.
+ *
+ * Jeśli zmienna SCRAPER_API_KEY jest ustawiona – używa ScraperAPI.
+ * Bez klucza działa tylko lokalnie (twoje IP nie jest blokowane).
+ */
+async function fetchOA(path) {
+  const url = path.startsWith('http') ? path : `${BASE_URL}${path}`;
+  const scraperKey = process.env.SCRAPER_API_KEY;
+
+  if (scraperKey) {
+    const scraperUrl = `http://api.scraperapi.com?api_key=${scraperKey}&url=${encodeURIComponent(url)}&render=false&country_code=pl`;
+    const { data } = await axios.get(scraperUrl, { timeout: 30000 });
+    return data;
+  }
+
+  // Bezpośredni request – działa lokalnie, blokowany na Vercel
+  const { data } = await axios.get(url, {
+    headers: BROWSER_HEADERS,
+    timeout: 15000
+  });
+  return data;
+}
+
 const client = axios.create({
   baseURL: BASE_URL,
   timeout: 15000,
   headers: BROWSER_HEADERS
 });
 
-async function fetchPage(url, options = {}) {
-  try {
-    const fullUrl = url.startsWith('http') ? url : `${BASE_URL}${url}`;
-    const response = await axios.get(fullUrl, {
-      headers: { ...BROWSER_HEADERS, ...(options.headers || {}) },
-      timeout: 15000,
-      ...options
-    });
-    return response.data;
-  } catch (e) {
-    console.error(`fetchPage error for ${url}:`, e.message);
-    throw e;
-  }
-}
-
-module.exports = { client, fetchPage, BASE_URL, BROWSER_HEADERS };
-
+module.exports = { client, fetchOA, BASE_URL, BROWSER_HEADERS };

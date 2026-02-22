@@ -1,29 +1,21 @@
 const axios = require('axios');
 const cheerio = require('cheerio');
-const { fetchPage, client, BASE_URL, BROWSER_HEADERS } = require('./http');
+const { fetchOA, client, BASE_URL, BROWSER_HEADERS } = require('./http');
 const resolvers = require('./resolvers');
 
-// Wyciąga wszystkie embeddy z strony odcinka OA
 async function getEmbeds(slug, episode) {
   let html;
   try {
-    const { data } = await axios.get(`https://ogladajanime.pl/anime/${slug}/${episode}`, {
-      headers: BROWSER_HEADERS,
-      timeout: 15000
-    });
-    html = data;
+    html = await fetchOA(`/anime/${slug}/${episode}`);
   } catch (e) {
     console.error(`getEmbeds fetch error for ${slug}/${episode}: ${e.message}`);
     return [];
   }
-  const $ = cheerio.load(html);
 
+  const $ = cheerio.load(html);
   const embeds = [];
 
-  // OA pokazuje playery jako iframe lub linki do playerów
-  // Struktura: przyciski z nazwą hostingu, kliknięcie ładuje iframe
-
-  // 1. Szukamy bezpośrednich iframe
+  // 1. Bezpośrednie iframe
   $('iframe[src]').each((i, el) => {
     const src = $(el).attr('src') || '';
     if (src && !src.includes('ogladajanime.pl')) {
@@ -31,20 +23,16 @@ async function getEmbeds(slug, episode) {
     }
   });
 
-  // 2. Szukamy linków do playerów w atrybutach data-*
+  // 2. data-* atrybuty
   $('[data-src], [data-url], [data-player]').each((i, el) => {
     const src = $(el).attr('data-src') || $(el).attr('data-url') || $(el).attr('data-player') || '';
-    if (src && src.includes('http')) {
-      embeds.push({ url: src });
-    }
+    if (src && src.includes('http')) embeds.push({ url: src });
   });
 
-  // 3. Szukamy JSON z listą playerów zakodowanym w skrypcie
-  // OA często trzyma dane playerów w <script> jako JSON lub JS object
+  // 3. URL-e hostingów w skryptach
   $('script').each((i, el) => {
     const content = $(el).html() || '';
 
-    // Szukamy URL-i hostingów w skryptach
     const urlPatterns = [
       /["']https?:\/\/(www\.)?(vidoza|cda|mp4upload|sibnet|youtube|youtu\.be|dood|streamtape|voe|filemoon)[^"'\s]+["']/gi,
       /src\s*[:=]\s*["'](https?:\/\/[^"']+)["']/gi,
@@ -61,7 +49,6 @@ async function getEmbeds(slug, episode) {
       }
     });
 
-    // Szukamy tablicy playerów np. var players = [{...}]
     const playersMatch = content.match(/(?:players|films|sources)\s*=\s*(\[[\s\S]*?\])/);
     if (playersMatch) {
       try {
@@ -76,20 +63,18 @@ async function getEmbeds(slug, episode) {
     }
   });
 
-  // 4. Próbujemy też bezpośrednio stronę playera przez URL watchepisode
-  // Wyciągamy episode IDs z linków na stronie
-  const epIds = [];
-  $('a[href*="watchepisode="]').each((i, el) => {
-    const href = $(el).attr('href') || '';
-    const m = href.match(/watchepisode=(\d+)/);
-    if (m) epIds.push(m[1]);
-  });
+  // 4. Episode IDs z parametrów watchepisode
+  if (embeds.length === 0) {
+    const epIds = [];
+    $('a[href*="watchepisode="]').each((i, el) => {
+      const href = $(el).attr('href') || '';
+      const m = href.match(/watchepisode=(\d+)/);
+      if (m) epIds.push(m[1]);
+    });
 
-  // Jeśli znaleziono episode ID, pobieramy stronę playera
-  if (epIds.length > 0 && embeds.length === 0) {
     for (const epId of epIds.slice(0, 3)) {
       try {
-        const playerHtml = await fetchPage(`/?action=anime&watchepisode=${epId}&subaction=player`);
+        const playerHtml = await fetchOA(`/?action=anime&watchepisode=${epId}&subaction=player`);
         const $p = cheerio.load(playerHtml);
 
         $p('iframe[src]').each((i, el) => {
@@ -117,7 +102,6 @@ async function getEmbeds(slug, episode) {
   });
 }
 
-// Wykrywa typ hostingu na podstawie URL
 function detectHosting(url) {
   if (url.includes('vidoza')) return 'vidoza';
   if (url.includes('cda.pl') || url.includes('ebd.cda.pl')) return 'cda';
@@ -128,7 +112,6 @@ function detectHosting(url) {
   if (url.includes('streamtape')) return 'streamtape';
   if (url.includes('voe.sx') || url.includes('voe.')) return 'voe';
   if (url.includes('filemoon')) return 'filemoon';
-  if (url.includes('streamlare')) return 'streamlare';
   if (url.match(/\.mp4(\?|$)/i)) return 'direct';
   return 'unknown';
 }
@@ -141,43 +124,24 @@ async function streamHandler({ type, id }) {
   const slug = parts[1];
   const episode = parts[2];
 
-  // Pobierz embeddy ze strony
   const embeds = await getEmbeds(slug, episode);
   console.log(`Found ${embeds.length} embeds for ${slug} ep ${episode}`);
 
-  // Resolwuj każdy embed równolegle
   const streams = [];
   const resolvePromises = embeds.map(async (embed) => {
     const hosting = detectHosting(embed.url);
 
-    // Direct MP4 – od razu dodaj
     if (hosting === 'direct') {
-      return {
-        url: embed.url,
-        name: 'OgladajAnime',
-        title: '📺 Direct MP4',
-        behaviorHints: { notWebReady: false }
-      };
+      return { url: embed.url, name: 'OgladajAnime', title: '📺 Direct MP4', behaviorHints: { notWebReady: false } };
     }
 
-    // Nieznany hosting - spróbuj jako embed
     if (hosting === 'unknown') {
-      return {
-        externalUrl: embed.url,
-        name: 'OgladajAnime',
-        title: '🔗 Zewnętrzny player'
-      };
+      return { externalUrl: embed.url, name: 'OgladajAnime', title: '🔗 Zewnętrzny player' };
     }
 
-    // Resolwer
     const resolver = resolvers[hosting];
     if (!resolver) {
-      // Brak resolwera – podaj jako external URL do otwarcia w przeglądarce
-      return {
-        externalUrl: embed.url,
-        name: 'OgladajAnime',
-        title: `▶ ${hosting.toUpperCase()}`
-      };
+      return { externalUrl: embed.url, name: 'OgladajAnime', title: `▶ ${hosting.toUpperCase()}` };
     }
 
     try {
@@ -185,19 +149,12 @@ async function streamHandler({ type, id }) {
       if (resolved) return resolved;
     } catch (e) {
       console.error(`Resolver ${hosting} failed for ${embed.url}:`, e.message);
-      // Fallback do external URL
-      return {
-        externalUrl: embed.url,
-        name: 'OgladajAnime',
-        title: `▶ ${hosting.toUpperCase()} (zewnętrzny)`
-      };
+      return { externalUrl: embed.url, name: 'OgladajAnime', title: `▶ ${hosting.toUpperCase()} (zewnętrzny)` };
     }
   });
 
   const results = await Promise.allSettled(resolvePromises);
-  results.forEach(r => {
-    if (r.status === 'fulfilled' && r.value) streams.push(r.value);
-  });
+  results.forEach(r => { if (r.status === 'fulfilled' && r.value) streams.push(r.value); });
 
   return { streams };
 }
