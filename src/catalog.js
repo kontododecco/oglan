@@ -1,101 +1,137 @@
+const axios = require('axios');
 const cheerio = require('cheerio');
 const { fetchPage, BASE_URL } = require('./http');
 
-// Buduje ID w formacie oa:<slug>
+/**
+ * KATALOG
+ *
+ * Problem: ogladajanime.pl zwraca 403 na requestach serwerowych do list anime
+ * (np. /all_anime_list). Strona blokuje boty po User-Agencie lub IP Vercel.
+ *
+ * Rozwiązanie: Używamy Jikan API (oficjalne nieoficjalne MAL API, darmowe, bez klucza)
+ * do pobierania katalogu i wyszukiwania. ID w formacie oa:<slug-mal-tytul> –
+ * slug generujemy z tytułu anime (tak samo jak robi OA).
+ *
+ * Dla strony głównej OA (ogladajanime.pl/) działa scraping, bo jest to
+ * publiczny render bez paginacji – tylko tę stronę używamy bezpośrednio.
+ */
+
+const JIKAN = 'https://api.jikan.moe/v4';
+
+// Konwertuje tytuł anime na slug w stylu OA (małe litery, myślniki zamiast spacji/specjalnych)
+function titleToSlug(title) {
+  return title
+    .toLowerCase()
+    .replace(/[^a-z0-9\s-]/g, '')
+    .trim()
+    .replace(/\s+/g, '-')
+    .replace(/-+/g, '-');
+}
+
 function makeId(slug) {
   return `oa:${slug}`;
 }
 
-// Parsuje stronę główną – sekcja "Ostatnio dodane"
+// Konwertuje obiekt anime z Jikan na meta Stremio
+function jikanToMeta(anime) {
+  const slug = titleToSlug(anime.title_english || anime.title);
+  const malId = anime.mal_id;
+
+  return {
+    id: makeId(slug),
+    type: anime.type === 'Movie' ? 'movie' : 'series',
+    name: anime.title_english || anime.title,
+    poster: anime.images?.jpg?.large_image_url || anime.images?.jpg?.image_url,
+    posterShape: 'poster',
+    description: anime.synopsis,
+    genres: (anime.genres || []).map(g => g.name),
+    year: anime.year || (anime.aired?.from ? new Date(anime.aired.from).getFullYear() : undefined),
+    imdbRating: anime.score,
+    // Trzymamy MAL ID w tle żeby meta handler mógł go użyć
+    _malId: malId
+  };
+}
+
+// Pobierz ostatnio emitowane anime z Jikan (sezonowe)
 async function fetchLatest(skip = 0) {
-  // strona nie ma prostej paginacji na liście ostatnich,
-  // więc pobieramy all_anime_list z sortowaniem po dacie
-  const page = Math.floor(skip / 20) + 1;
-  const html = await fetchPage(`/all_anime_list/${page}`);
-  return parseAnimeList(html);
+  const page = Math.floor(skip / 25) + 1;
+  try {
+    const { data } = await axios.get(`${JIKAN}/seasons/now`, {
+      params: { page, limit: 25 },
+      timeout: 10000
+    });
+    return (data.data || []).map(jikanToMeta);
+  } catch (e) {
+    console.error('Jikan fetchLatest error:', e.message);
+    return [];
+  }
 }
 
-// Pobiera popularność (strona główna – sekcja "Najczęściej wyświetlane")
-async function fetchTop() {
-  const html = await fetchPage('/');
-  const $ = cheerio.load(html);
-  const metas = [];
-
-  // sekcja "Najczęściej wyświetlane dzisiaj"
-  $('a[href^="/anime/"]').each((i, el) => {
-    const href = $(el).attr('href') || '';
-    const slug = href.replace('/anime/', '').split('/')[0];
-    if (!slug || slug === '') return;
-
-    const img = $(el).find('img');
-    const name = img.attr('alt') || img.attr('title') || $(el).text().trim();
-    const poster = img.attr('src') || img.attr('data-src') || '';
-
-    if (name && slug && !metas.find(m => m.id === makeId(slug))) {
-      metas.push({
-        id: makeId(slug),
-        type: 'series',
-        name: name.trim(),
-        poster: poster.startsWith('http') ? poster : `${BASE_URL}${poster}`,
-        posterShape: 'poster'
-      });
-    }
-  });
-
-  return metas.slice(0, 20);
+// Pobierz top anime z Jikan
+async function fetchTop(skip = 0) {
+  const page = Math.floor(skip / 25) + 1;
+  try {
+    const { data } = await axios.get(`${JIKAN}/top/anime`, {
+      params: { page, limit: 25 },
+      timeout: 10000
+    });
+    return (data.data || []).map(jikanToMeta);
+  } catch (e) {
+    console.error('Jikan fetchTop error:', e.message);
+    return [];
+  }
 }
 
-// Wyszukiwanie
+// Wyszukiwanie przez Jikan
 async function fetchSearch(query) {
-  const html = await fetchPage(`/search/name/${encodeURIComponent(query)}`);
-  return parseAnimeList(html);
+  try {
+    const { data } = await axios.get(`${JIKAN}/anime`, {
+      params: { q: query, limit: 20, sfw: false },
+      timeout: 10000
+    });
+    return (data.data || []).map(jikanToMeta);
+  } catch (e) {
+    console.error('Jikan search error:', e.message);
+
+    // Fallback: próbuj scraping strony głównej OA (działa bo nie jest stroną listową)
+    try {
+      const html = await fetchPage(`/?s=${encodeURIComponent(query)}`);
+      return parseOAHomepage(html);
+    } catch (e2) {
+      return [];
+    }
+  }
 }
 
-// Uniwersalny parser listy anime z dowolnej strony OA
-function parseAnimeList(html) {
+// Parser strony głównej OA (fallback) – działa, bo główna strona nie jest blokowana
+function parseOAHomepage(html) {
   const $ = cheerio.load(html);
   const metas = [];
   const seen = new Set();
 
-  // Główne bloki anime – różne selektory dla różnych podstron
-  const selectors = [
-    'a[href^="/anime/"]',
-  ];
+  $('a[href^="/anime/"]').each((i, el) => {
+    const href = $(el).attr('href') || '';
+    const match = href.match(/^\/anime\/([^\/]+)\/?$/);
+    if (!match) return;
 
-  selectors.forEach(sel => {
-    $(sel).each((i, el) => {
-      const href = $(el).attr('href') || '';
-      // wyciąga slug: /anime/some-title → some-title
-      const match = href.match(/^\/anime\/([^\/]+)\/?$/);
-      if (!match) return;
+    const slug = match[1];
+    if (seen.has(slug)) return;
+    seen.add(slug);
 
-      const slug = match[1];
-      if (seen.has(slug)) return;
-      seen.add(slug);
+    const img = $(el).find('img').first();
+    let poster = img.attr('src') || img.attr('data-src') || '';
+    if (poster && !poster.startsWith('http')) poster = `${BASE_URL}${poster}`;
 
-      const img = $(el).find('img').first();
-      let poster = img.attr('src') || img.attr('data-src') || '';
-      if (poster && !poster.startsWith('http')) poster = `${BASE_URL}${poster}`;
+    let name = img.attr('alt') || img.attr('title') || $(el).attr('title') || '';
+    if (!name) name = $(el).find('.title, .name, h3, h2').first().text().trim();
+    if (!name) return;
 
-      // Tytuł: alt atrybutu img, lub title linku, lub tekst w .title/.name
-      let name = img.attr('alt') || img.attr('title') || '';
-      if (!name) {
-        name = $(el).find('.title, .name, h3, h2').first().text().trim();
-      }
-      if (!name) name = $(el).attr('title') || '';
-      if (!name) return; // pomiń jeśli brak tytułu
-
-      const ratingText = $(el).find('em, .rating, .score').first().text().trim();
-      const rating = parseFloat(ratingText) || undefined;
-
-      metas.push({
-        id: makeId(slug),
-        type: 'series',
-        name: name.trim(),
-        poster: poster || undefined,
-        posterShape: 'poster',
-        imdbRating: rating
-      });
+    metas.push({
+      id: makeId(slug),
+      type: 'series',
+      name: name.trim(),
+      poster: poster || undefined,
+      posterShape: 'poster'
     });
   });
 
@@ -111,7 +147,7 @@ async function catalogHandler({ type, id, extra }) {
   if (search) {
     metas = await fetchSearch(search);
   } else if (id === 'oa-top') {
-    metas = await fetchTop();
+    metas = await fetchTop(skip);
   } else {
     // oa-latest
     metas = await fetchLatest(skip);
@@ -120,4 +156,4 @@ async function catalogHandler({ type, id, extra }) {
   return { metas };
 }
 
-module.exports = { catalogHandler };
+module.exports = { catalogHandler, titleToSlug };

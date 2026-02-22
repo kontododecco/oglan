@@ -1,11 +1,21 @@
+const axios = require('axios');
 const cheerio = require('cheerio');
-const { fetchPage, client, BASE_URL } = require('./http');
+const { fetchPage, client, BASE_URL, BROWSER_HEADERS } = require('./http');
 const resolvers = require('./resolvers');
 
 // Wyciąga wszystkie embeddy z strony odcinka OA
 async function getEmbeds(slug, episode) {
-  const url = `/anime/${slug}/${episode}`;
-  const html = await fetchPage(url);
+  let html;
+  try {
+    const { data } = await axios.get(`https://ogladajanime.pl/anime/${slug}/${episode}`, {
+      headers: BROWSER_HEADERS,
+      timeout: 15000
+    });
+    html = data;
+  } catch (e) {
+    console.error(`getEmbeds fetch error for ${slug}/${episode}: ${e.message}`);
+    return [];
+  }
   const $ = cheerio.load(html);
 
   const embeds = [];

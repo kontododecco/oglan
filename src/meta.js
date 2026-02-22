@@ -1,113 +1,137 @@
+const axios = require('axios');
 const cheerio = require('cheerio');
 const { fetchPage, BASE_URL } = require('./http');
 
+const JIKAN = 'https://api.jikan.moe/v4';
+
+// Slug → tytuł do wyszukiwania w Jikan
+function slugToQuery(slug) {
+  return slug.replace(/-/g, ' ').replace(/\d+$/, '').trim();
+}
+
+// Pobierz dane anime z Jikan po tytule
+async function jikanSearch(query) {
+  try {
+    const { data } = await axios.get(`${JIKAN}/anime`, {
+      params: { q: query, limit: 1, sfw: false },
+      timeout: 8000
+    });
+    return data.data?.[0] || null;
+  } catch (e) {
+    return null;
+  }
+}
+
+// Pobierz listę odcinków z OA – próbujemy z przeglądarkowymi nagłówkami
+async function fetchEpisodesFromOA(slug) {
+  const headers = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+    'Accept-Language': 'pl-PL,pl;q=0.9',
+    'Accept-Encoding': 'gzip, deflate, br',
+    'Connection': 'keep-alive',
+    'Upgrade-Insecure-Requests': '1',
+    'Sec-Fetch-Dest': 'document',
+    'Sec-Fetch-Mode': 'navigate',
+    'Sec-Fetch-Site': 'none',
+    'Sec-Fetch-User': '?1',
+    'Cache-Control': 'max-age=0'
+  };
+
+  try {
+    const { data } = await axios.get(`https://ogladajanime.pl/anime/${slug}`, {
+      headers,
+      timeout: 12000
+    });
+
+    const $ = cheerio.load(data);
+    const epNumbers = new Set();
+
+    $(`a[href^="/anime/${slug}/"]`).each((i, el) => {
+      const href = $(el).attr('href') || '';
+      const m = href.match(/\/anime\/.+?\/(\d+)$/);
+      if (m) epNumbers.add(parseInt(m[1]));
+    });
+
+    // Alternatywnie szukaj numerów odcinków w treści strony
+    if (epNumbers.size === 0) {
+      const allLinks = $('a[href*="/anime/"]');
+      allLinks.each((i, el) => {
+        const href = $(el).attr('href') || '';
+        const m = href.match(/\/(\d+)(?:\?|$)/);
+        if (m && parseInt(m[1]) > 0 && parseInt(m[1]) < 5000) {
+          epNumbers.add(parseInt(m[1]));
+        }
+      });
+    }
+
+    return Array.from(epNumbers).sort((a, b) => a - b);
+  } catch (e) {
+    console.error(`OA episode fetch failed for ${slug}: ${e.message}`);
+    return [];
+  }
+}
+
+// Jeśli OA blokuje, generujemy odcinki z Jikan (episodes count)
+async function getEpisodeCountFromJikan(malId) {
+  try {
+    const { data } = await axios.get(`${JIKAN}/anime/${malId}`, { timeout: 8000 });
+    return data.data?.episodes || 0;
+  } catch (e) {
+    return 0;
+  }
+}
+
 async function metaHandler({ type, id }) {
-  // id = "oa:some-anime-slug"
   const slug = id.replace('oa:', '');
-  const html = await fetchPage(`/anime/${slug}`);
-  const $ = cheerio.load(html);
+  const query = slugToQuery(slug);
 
-  // ── Dane podstawowe ────────────────────────────────────────────────────────
-  const name = $('h1, .anime-title').first().text().trim()
-    || $('title').text().split(' - ')[0].trim();
+  // 1. Pobierz metadane z Jikan
+  const anime = await jikanSearch(query);
 
-  // Poster – szukamy pierwszego dużego obrazka
-  let poster = '';
-  const ogImage = $('meta[property="og:image"]').attr('content');
-  if (ogImage) {
-    poster = ogImage;
-  } else {
-    const img = $('.anime-poster img, .cover img, .poster img').first();
-    poster = img.attr('src') || img.attr('data-src') || '';
-    if (poster && !poster.startsWith('http')) poster = `${BASE_URL}${poster}`;
+  // 2. Pobierz odcinki z OA
+  let epNumbers = await fetchEpisodesFromOA(slug);
+
+  // 3. Fallback: jeśli OA zablokował, użyj liczby odcinków z Jikan
+  if (epNumbers.length === 0 && anime?.episodes && anime.episodes > 0) {
+    epNumbers = Array.from({ length: anime.episodes }, (_, i) => i + 1);
   }
 
-  // Fallback do CDN (wiemy że obrazki są w formacie /images/anime_new/{id}/0.webp)
-  if (!poster) {
-    const imgAny = $('img[src*="anime_new"]').first();
-    poster = imgAny.attr('src') || '';
+  // 4. Jeśli nadal brak – minimum 1 odcinek (żeby coś pokazać)
+  if (epNumbers.length === 0) {
+    epNumbers = [1];
   }
 
-  // ── Opis ───────────────────────────────────────────────────────────────────
-  let description = '';
-  // szukamy bloku opisu – OA używa różnych klas
-  const descCandidates = [
-    '.description', '.synopsis', '.anime-description',
-    '[itemprop="description"]', '.anime-desc', '.desc'
-  ];
-  for (const sel of descCandidates) {
-    const text = $(sel).first().text().trim();
-    if (text && text.length > 30) {
-      description = text;
-      break;
-    }
-  }
+  // 5. Buduj videos (odcinki)
+  const videos = epNumbers.map(ep => ({
+    id: `${id}:${ep}`,
+    title: `Odcinek ${ep}`,
+    season: 1,
+    episode: ep,
+    released: anime?.aired?.from
+      ? new Date(anime.aired.from).toISOString()
+      : new Date().toISOString()
+  }));
 
-  // ── Gatunek / tags ─────────────────────────────────────────────────────────
-  const genres = [];
-  $('a[href*="/genre/"], a[href*="gatunek"], .genre a, .genres a').each((i, el) => {
-    const g = $(el).text().trim();
-    if (g) genres.push(g);
-  });
-
-  // ── Rok / status ───────────────────────────────────────────────────────────
-  let year;
-  const yearMatch = html.match(/Start emisji:\s*(\d{4})/);
-  if (yearMatch) year = parseInt(yearMatch[1]);
-
-  // ── Odcinki ────────────────────────────────────────────────────────────────
-  const videos = [];
-  // Numeracja odcinków w linkach: /anime/{slug}/1, /anime/{slug}/2 ...
-  // OA renderuje listę odcinków jako liczby w przyciskach/linkach
-  const epNumbers = new Set();
-
-  $(`a[href^="/anime/${slug}/"]`).each((i, el) => {
-    const href = $(el).attr('href') || '';
-    const epMatch = href.match(/\/anime\/.+?\/(\d+)$/);
-    if (epMatch) {
-      epNumbers.add(parseInt(epMatch[1]));
-    }
-  });
-
-  // Jeśli strona nie załadowała odcinków przez JS (rzadkie) – parsujemy tekst
-  if (epNumbers.size === 0) {
-    // Szukamy tekstów "Odcinek X" lub liczb w liście
-    $('a, button, span').each((i, el) => {
-      const text = $(el).text().trim();
-      if (/^\d+$/.test(text)) {
-        const num = parseInt(text);
-        if (num > 0 && num < 5000) epNumbers.add(num);
-      }
-    });
-  }
-
-  const sortedEps = Array.from(epNumbers).sort((a, b) => a - b);
-  sortedEps.forEach(ep => {
-    videos.push({
-      id: `${id}:${ep}`,
-      title: `Odcinek ${ep}`,
-      season: 1,
-      episode: ep,
-      released: new Date().toISOString() // brak daty per odcinek na stronie
-    });
-  });
-
+  // 6. Buduj meta z danych Jikan (lub fallback bez nich)
   const meta = {
     id,
     type: videos.length === 1 ? 'movie' : 'series',
-    name,
-    poster,
-    background: poster,
-    description,
-    genres,
-    year,
-    videos: videos.length > 0 ? videos : undefined
+    name: anime?.title_english || anime?.title || query.replace(/-/g, ' '),
+    poster: anime?.images?.jpg?.large_image_url,
+    background: anime?.images?.jpg?.large_image_url,
+    description: anime?.synopsis,
+    genres: (anime?.genres || []).map(g => g.name),
+    year: anime?.year || (anime?.aired?.from ? new Date(anime.aired.from).getFullYear() : undefined),
+    imdbRating: anime?.score,
+    videos
   };
 
   // Usuń undefined pola
-  Object.keys(meta).forEach(k => meta[k] === undefined && delete meta[k]);
+  Object.keys(meta).forEach(k => (meta[k] === undefined || meta[k] === null) && delete meta[k]);
 
   return { meta };
 }
 
 module.exports = { metaHandler };
+
