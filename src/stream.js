@@ -1,154 +1,137 @@
 const axios = require('axios');
 const cheerio = require('cheerio');
-const { fetchOA, BASE_URL, BROWSER_HEADERS } = require('./http');
+const { fetchOA, BASE_URL } = require('./http');
 const resolvers = require('./resolvers');
 
 /**
- * Jak działa ogladajanime.pl:
+ * ID odcinka format: "oa:MAL_ID:OA_SLUG:EPISODE_NUMBER"
+ * np. "oa:52991:sousou-no-frieren-2nd-season:5"
  *
- * 1. Strona anime: /anime/{slug}
- *    - Zawiera listę odcinków jako linki /anime/{slug}/{ep}
- *    - Zawiera wewnętrzne ID anime (np. data-id lub w JS)
- *
- * 2. Strona odcinka: /anime/{slug}/{ep}
- *    - Zawiera listę playerów z ID odcinka w linkach:
- *      /?action=anime&id={animeId}&watchepisode={episodeId}&subaction=player
- *    - Każdy player to osobny link (różne hostingi)
- *
- * 3. Strona playera: /?action=anime&id=X&watchepisode=Y&subaction=player
- *    - Zwraca iframe lub bezpośredni link do hostingu
+ * Slug jest zakodowany w ID przez meta handler, więc tu nie musimy go szukać.
  */
 
-// Pobierz stronę odcinka i wyciągnij linki do playerów
 async function getPlayerLinks(slug, episode) {
   let html;
   try {
     html = await fetchOA(`/anime/${slug}/${episode}`);
   } catch (e) {
-    console.error(`Episode page fetch failed: ${e.message}`);
+    console.error(`[stream] Episode page fetch failed for ${slug}/${episode}: ${e.message}`);
     return [];
   }
 
   const $ = cheerio.load(html);
+
+  // Sprawdź czy dostaliśmy właściwą stronę (nie redirect na główną)
+  // Jeśli URL strony to "/" lub strona nie zawiera linków do tego slug – to redirect
+  const hasEpisodeContent = $(`a[href^="/anime/${slug}/"], [href*="watchepisode"], .player, #player, .video`).length > 0;
+  if (!hasEpisodeContent) {
+    console.warn(`[stream] Page for ${slug}/${episode} looks like a redirect/404, no episode content found`);
+    // Loguj fragment HTML żeby zobaczyć co dostaliśmy
+    const preview = $.html().replace(/\s+/g, ' ').substring(0, 500);
+    console.log(`[stream] Page preview: ${preview}`);
+    return [];
+  }
+
   const playerLinks = [];
   const seen = new Set();
 
-  // Szukamy linków w formacie /?action=anime&id=X&watchepisode=Y&subaction=player
-  $('a[href*="watchepisode="], a[href*="action=anime"]').each((i, el) => {
+  // Linki do playerów: /?action=anime&id=X&watchepisode=Y&subaction=player
+  $('a[href*="watchepisode="]').each((i, el) => {
     const href = $(el).attr('href') || '';
-    if (href.includes('watchepisode=') && !seen.has(href)) {
+    if (!seen.has(href)) {
       seen.add(href);
-      const fullUrl = href.startsWith('http') ? href : `${BASE_URL}${href.startsWith('/') ? '' : '/'}${href}`;
-      const label = $(el).text().trim() || $(el).attr('title') || 'Player';
+      const fullUrl = href.startsWith('http') ? href : `${BASE_URL}${href}`;
+      const label = $(el).text().trim() || `Player ${playerLinks.length + 1}`;
       playerLinks.push({ url: fullUrl, label });
     }
   });
 
-  // Szukamy też w atrybutach data-*
-  $('[data-watchepisode], [data-episode-id]').each((i, el) => {
-    const epId = $(el).attr('data-watchepisode') || $(el).attr('data-episode-id');
-    const animeId = $(el).attr('data-anime-id') || $(el).attr('data-id');
-    if (epId && animeId) {
-      const url = `${BASE_URL}/?action=anime&id=${animeId}&watchepisode=${epId}&subaction=player`;
+  // Szukaj też w atrybutach onclick / data-*
+  $('[onclick*="watchepisode"], [data-watchepisode]').each((i, el) => {
+    const onclick = $(el).attr('onclick') || '';
+    const epId = $(el).attr('data-watchepisode');
+    const animeId = $(el).attr('data-id') || $(el).attr('data-anime-id');
+
+    const urlMatch = onclick.match(/watchepisode=(\d+)/);
+    const idMatch = onclick.match(/[&?]id=(\d+)/);
+
+    const wId = epId || (urlMatch && urlMatch[1]);
+    const aId = animeId || (idMatch && idMatch[1]);
+
+    if (wId && aId) {
+      const url = `${BASE_URL}/?action=anime&id=${aId}&watchepisode=${wId}&subaction=player`;
       if (!seen.has(url)) {
         seen.add(url);
-        playerLinks.push({ url, label: $(el).text().trim() || 'Player' });
+        playerLinks.push({ url, label: $(el).text().trim() || `Player ${playerLinks.length + 1}` });
       }
     }
   });
 
-  // Szukaj w skryptach – OA może trzymać listę playerów w JS
+  // Szukaj w skryptach
   $('script').each((i, el) => {
     const content = $(el).html() || '';
+    if (!content.includes('watchepisode')) return;
 
-    // Pattern: watchepisode=12345 w dowolnym kontekście
-    const watchPattern = /watchepisode[=:](\d+)/g;
-    const animeIdPattern = /(?:anime_id|animeId|&id=)[\s:='"]*(\d+)/;
-
-    const animeIdMatch = content.match(animeIdPattern);
+    // Wyciągnij pary animeId + watchepisodeId
+    const animeIdMatch = content.match(/[&?]id=(\d+)/);
     const animeId = animeIdMatch ? animeIdMatch[1] : null;
 
-    if (animeId) {
-      let m;
-      while ((m = watchPattern.exec(content)) !== null) {
-        const epId = m[1];
-        const url = `${BASE_URL}/?action=anime&id=${animeId}&watchepisode=${epId}&subaction=player`;
+    const watchMatches = content.matchAll(/watchepisode[=:](\d+)/g);
+    for (const m of watchMatches) {
+      if (animeId) {
+        const url = `${BASE_URL}/?action=anime&id=${animeId}&watchepisode=${m[1]}&subaction=player`;
         if (!seen.has(url)) {
           seen.add(url);
-          playerLinks.push({ url, label: 'Player' });
+          playerLinks.push({ url, label: `Player ${playerLinks.length + 1}` });
         }
       }
     }
-
-    // Szukaj też tablicy playerów / JSON
-    const jsonPatterns = [
-      /players\s*=\s*(\[[\s\S]*?\]);/,
-      /episodes\s*=\s*(\[[\s\S]*?\]);/,
-      /var\s+\w+\s*=\s*(\[[\s\S]*?watchepisode[\s\S]*?\]);/,
-    ];
-    for (const pattern of jsonPatterns) {
-      const match = content.match(pattern);
-      if (match) {
-        try {
-          const arr = JSON.parse(match[1]);
-          arr.forEach(item => {
-            const epId = item.watchepisode || item.episode_id || item.id;
-            const aId = item.anime_id || item.animeId || animeId;
-            if (epId && aId) {
-              const url = `${BASE_URL}/?action=anime&id=${aId}&watchepisode=${epId}&subaction=player`;
-              if (!seen.has(url)) {
-                seen.add(url);
-                playerLinks.push({ url, label: item.name || item.label || 'Player' });
-              }
-            }
-          });
-        } catch (e) {}
-      }
-    }
   });
 
-  console.log(`Found ${playerLinks.length} player links for ${slug}/${episode}`);
+  console.log(`[stream] Found ${playerLinks.length} player links for ${slug}/${episode}`);
+  if (playerLinks.length > 0) {
+    console.log(`[stream] First link: ${playerLinks[0].url}`);
+  }
   return playerLinks;
 }
 
-// Pobierz embed URL ze strony playera OA
 async function getEmbedFromPlayerPage(playerUrl) {
   let html;
   try {
     html = await fetchOA(playerUrl);
   } catch (e) {
-    console.error(`Player page fetch failed: ${e.message}`);
+    console.error(`[stream] Player page fetch failed: ${e.message}`);
     return null;
   }
 
   const $ = cheerio.load(html);
 
   // Szukamy iframe z zewnętrznym hostem
-  const iframe = $('iframe[src]').filter((i, el) => {
+  let embedUrl = null;
+  $('iframe[src]').each((i, el) => {
+    if (embedUrl) return;
     const src = $(el).attr('src') || '';
-    return src && !src.includes('ogladajanime.pl');
-  }).first();
+    if (src && !src.includes('ogladajanime.pl') && src.startsWith('http')) {
+      embedUrl = src;
+    } else if (src && src.startsWith('//')) {
+      embedUrl = 'https:' + src;
+    }
+  });
+  if (embedUrl) return embedUrl;
 
-  if (iframe.length) {
-    let src = iframe.attr('src') || '';
-    if (src.startsWith('//')) src = 'https:' + src;
-    return src;
-  }
-
-  // Szukamy bezpośrednich URL-i do plików wideo w skryptach
+  // Szukamy w skryptach
   const scripts = $('script').map((i, el) => $(el).html() || '').get().join('\n');
-
-  const videoPatterns = [
-    /["'](https?:\/\/[^"'\s]+\.(?:mp4|m3u8)[^"'\s]*)["']/i,
-    /file\s*[:=]\s*["'](https?:\/\/[^"']+)["']/i,
-    /src\s*[:=]\s*["'](https?:\/\/(?:vidoza|cda|mp4upload|sibnet|dood|streamtape|voe|filemoon)[^"']+)["']/i,
+  const patterns = [
+    /["'](https?:\/\/[^"'\s]+\.(?:mp4|m3u8)[^"'\s]{0,100})["']/i,
+    /file\s*[=:]\s*["'](https?:\/\/(?:vidoza|cda|mp4upload|sibnet|dood|streamtape|voe|filemoon)[^"']+)["']/i,
+    /src\s*[=:]\s*["'](https?:\/\/(?:vidoza|cda|mp4upload|sibnet|dood|streamtape|voe|filemoon)[^"']+)["']/i,
   ];
-
-  for (const pattern of videoPatterns) {
-    const m = scripts.match(pattern);
+  for (const p of patterns) {
+    const m = scripts.match(p);
     if (m) return m[1];
   }
 
+  console.warn(`[stream] No embed found in player page: ${playerUrl.substring(0, 100)}`);
   return null;
 }
 
@@ -169,9 +152,8 @@ function detectHosting(url) {
 
 async function resolveEmbed(embedUrl, label) {
   const hosting = detectHosting(embedUrl);
-
   if (hosting === 'direct') {
-    return { url: embedUrl, name: 'OgladajAnime', title: `📺 ${label || 'Direct'}`, behaviorHints: { notWebReady: false } };
+    return { url: embedUrl, name: 'OgladajAnime', title: `📺 ${label}`, behaviorHints: { notWebReady: false } };
   }
 
   const resolver = resolvers[hosting];
@@ -179,59 +161,42 @@ async function resolveEmbed(embedUrl, label) {
     try {
       const result = await resolver(embedUrl);
       if (result) {
-        result.title = `${result.title || ''} [${label}]`.trim();
+        result.title = `${result.title || hosting} [${label}]`;
         return result;
       }
     } catch (e) {
-      console.error(`Resolver ${hosting} failed: ${e.message}`);
+      console.error(`[stream] Resolver ${hosting} failed: ${e.message}`);
     }
   }
 
-  // Fallback: zwróć embed jako external URL
-  return {
-    externalUrl: embedUrl,
-    name: 'OgladajAnime',
-    title: `▶ ${label || hosting.toUpperCase()}`,
-  };
+  return { externalUrl: embedUrl, name: 'OgladajAnime', title: `▶ ${label} (${hosting})` };
 }
 
 async function streamHandler({ type, id }) {
-  // id format: "oa:anime-slug:episode-number"
+  // id format: "oa:MAL_ID:OA_SLUG:EPISODE"
   const parts = id.split(':');
-  if (parts.length < 3) return { streams: [] };
-
-  const slug = parts[1];
-  const episode = parts[2];
-
-  // Krok 1: pobierz linki do playerów ze strony odcinka
-  const playerLinks = await getPlayerLinks(slug, episode);
-
-  if (playerLinks.length === 0) {
-    console.log(`No player links found for ${slug} ep ${episode}`);
+  if (parts.length < 4) {
+    console.error(`[stream] Invalid ID format: ${id}`);
     return { streams: [] };
   }
 
-  // Krok 2: dla każdego playera pobierz embed URL (równolegle, max 5)
-  const limited = playerLinks.slice(0, 5);
-  const embedResults = await Promise.allSettled(
-    limited.map(async ({ url, label }) => {
-      const embedUrl = await getEmbedFromPlayerPage(url);
-      return { embedUrl, label };
-    })
-  );
+  const slug = parts[2];
+  const episode = parts[3];
 
-  // Krok 3: resolwuj każdy embed
+  const playerLinks = await getPlayerLinks(slug, episode);
+  if (playerLinks.length === 0) return { streams: [] };
+
   const streams = [];
-  await Promise.allSettled(
-    embedResults.map(async (result) => {
-      if (result.status !== 'fulfilled' || !result.value.embedUrl) return;
-      const { embedUrl, label } = result.value;
-      const stream = await resolveEmbed(embedUrl, label);
-      if (stream) streams.push(stream);
+  const results = await Promise.allSettled(
+    playerLinks.slice(0, 5).map(async ({ url, label }) => {
+      const embedUrl = await getEmbedFromPlayerPage(url);
+      if (!embedUrl) return null;
+      return resolveEmbed(embedUrl, label);
     })
   );
 
-  console.log(`Returning ${streams.length} streams for ${slug} ep ${episode}`);
+  results.forEach(r => { if (r.status === 'fulfilled' && r.value) streams.push(r.value); });
+  console.log(`[stream] Returning ${streams.length} streams for ${slug} ep ${episode}`);
   return { streams };
 }
 
