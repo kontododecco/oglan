@@ -1,13 +1,72 @@
 # 🎌 OgladajAnime.pl – Stremio Addon
 
-Nieoficjalny addon Stremio który pobiera treści z serwisu [ogladajanime.pl](https://ogladajanime.pl).
+Nieoficjalny addon Stremio dla ogladajanime.pl.
+
+## ⚠️ Problem z Vercel (403) i jak go naprawić
+
+Serwery Vercel mają zablokowane IP przez ogladajanime.pl – strona zwraca 403
+na wszystkich requestach z centrów danych. Masz **dwie opcje**:
+
+---
+
+### Opcja A: ScraperAPI (zalecane dla Vercel) ✅
+
+**ScraperAPI** to proxy które rotuje IP i nagłówki, omijając blokady.
+
+1. Zarejestruj się na [scraperapi.com](https://www.scraperapi.com/) – **darmowy plan: 1000 requestów/miesiąc** (wystarczy do normalnego użytku)
+2. Skopiuj swój klucz API
+3. W panelu Vercel: **Settings → Environment Variables** → dodaj:
+   ```
+   Name:  SCRAPER_API_KEY
+   Value: twój_klucz_scraperapi
+   ```
+4. Zrób redeploy (lub Vercel zrobi to automatycznie)
+
+Bez tego klucza addon działa tylko lokalnie.
+
+---
+
+### Opcja B: Uruchom lokalnie 🖥️
+
+Twoje domowe IP nie jest blokowane. Addon działa bez żadnych dodatkowych usług:
+
+```bash
+npm install
+npm start
+# Addon na http://localhost:7000
+```
+
+Zainstaluj w Stremio wpisując: `stremio://localhost:7000/manifest.json`
+
+**Wada:** addon działa tylko gdy masz uruchomiony serwer na komputerze.
+
+---
+
+## 🚀 Deployment na Vercel
+
+```bash
+# 1. Wrzuć na GitHub
+git init && git add . && git commit -m "init"
+git remote add origin https://github.com/TWOJA/repo.git
+git push -u origin main
+
+# 2. Zaloguj się na vercel.com → New Project → wybierz repo → Deploy
+
+# 3. Dodaj SCRAPER_API_KEY w Settings → Environment Variables
+
+# 4. Redeploy i gotowe!
+```
+
+Po deployu wejdź na URL Vercel i kliknij "Zainstaluj w Stremio".
+
+---
 
 ## Obsługiwane hostingi
 
 | Hosting | Status |
 |---------|--------|
 | Vidoza | ✅ |
-| CDA.pl | ✅ (z deszyfrowaniem) |
+| CDA.pl | ✅ |
 | MP4Upload | ✅ |
 | Sibnet | ✅ |
 | YouTube | ✅ |
@@ -19,103 +78,12 @@ Nieoficjalny addon Stremio który pobiera treści z serwisu [ogladajanime.pl](ht
 ## Struktura projektu
 
 ```
-ogladajanime-stremio/
-├── api/
-│   └── index.js          ← Główny serwer Express (entry point Vercel)
-├── src/
-│   ├── manifest.js       ← Definicja addonu
-│   ├── http.js           ← Klient HTTP ze wspólnymi nagłówkami
-│   ├── catalog.js        ← Handler katalogu (lista anime, wyszukiwanie)
-│   ├── meta.js           ← Handler metadanych (opis, lista odcinków)
-│   ├── stream.js         ← Handler streamów (wyciąganie linków)
-│   └── resolvers/
-│       ├── index.js      ← Eksport wszystkich resolwerów
-│       ├── vidoza.js
-│       ├── cda.js
-│       ├── mp4upload.js
-│       ├── sibnet.js
-│       ├── youtube.js
-│       ├── dood.js
-│       ├── streamtape.js
-│       ├── voe.js
-│       └── filemoon.js
-├── vercel.json           ← Konfiguracja Vercel
-├── package.json
-└── README.md
+api/index.js          ← Serwer Express (entry point Vercel)
+src/manifest.js       ← Definicja addonu
+src/http.js           ← Klient HTTP + obsługa ScraperAPI proxy
+src/catalog.js        ← Katalog przez Jikan/MAL API (nie scraped)
+src/meta.js           ← Metadane z Jikan + odcinki z OA
+src/stream.js         ← Wyciąganie linków wideo
+src/resolvers/        ← Resolwery dla każdego hostingu
+vercel.json           ← Konfiguracja Vercel
 ```
-
----
-
-## 🚀 Deployment na Vercel (krok po kroku)
-
-### 1. Załóż konto GitHub i wrzuć projekt
-
-```bash
-git init
-git add .
-git commit -m "Initial commit"
-# Utwórz repo na GitHub i push:
-git remote add origin https://github.com/TWOJA-NAZWA/ogladajanime-stremio.git
-git push -u origin main
-```
-
-### 2. Deploy na Vercel
-
-1. Wejdź na [vercel.com](https://vercel.com) i zaloguj się przez GitHub
-2. Kliknij **"New Project"**
-3. Wybierz swoje repozytorium `ogladajanime-stremio`
-4. Ustawienia pozostaw domyślne – Vercel automatycznie wykryje `vercel.json`
-5. Kliknij **"Deploy"**
-
-### 3. Zainstaluj addon w Stremio
-
-Po deployu dostaniesz URL, np. `https://ogladajanime-stremio.vercel.app`
-
-**Opcja A – przez przeglądarkę:**
-Wejdź na adres deploymentu i kliknij przycisk **"Zainstaluj w Stremio"**
-
-**Opcja B – ręcznie:**
-1. Otwórz Stremio
-2. Kliknij ikonę puzzle (Addons) → **"Community Addons"**
-3. Kliknij **"Add Addon"** / ikonę `+`
-4. Wklej URL: `https://ogladajanime-stremio.vercel.app/manifest.json`
-5. Kliknij **"Install"**
-
----
-
-## 💻 Uruchomienie lokalne
-
-```bash
-npm install
-npm start
-# Addon dostępny na http://localhost:7000
-# Stremio URL: stremio://localhost:7000/manifest.json
-```
-
-Lub z auto-restartem:
-```bash
-npm run dev
-```
-
----
-
-## ⚠️ Uwagi
-
-- Addon jest **nieoficjalny** i nie jest powiązany z ogladajanime.pl
-- Serwis ogladajanime.pl nie hostuje treści – wyłącznie linkuje do zewnętrznych serwerów wideo
-- Resolwery mogą przestać działać jeśli hostingi zmienią swój kod
-- CDA może wymagać aktualizacji algorytmu deszyfrowania po zmianach po ich stronie
-
----
-
-## 🔧 Rozwiązywanie problemów
-
-**Brak streamów:**
-- Strona mogła zmienić strukturę HTML – sprawdź selektory w `src/stream.js`
-- Hosting mógł zmienić metodę obfuskacji – zaktualizuj odpowiedni resolwer
-
-**Błąd 500 na Vercel:**
-- Sprawdź logi w panelu Vercel → zakładka "Deployments" → "Functions"
-
-**Addon nie pojawia się w Stremio:**
-- Sprawdź czy manifest.json jest dostępny: `https://TWOJ-URL/manifest.json`
