@@ -14,16 +14,7 @@ const BROWSER_HEADERS = {
   'Sec-Fetch-Site': 'none',
 };
 
-/**
- * Pobierz stronę OA przez ScraperAPI z cookie sesji.
- *
- * Cookie sesji ustawiasz raz ręcznie:
- * 1. Zaloguj się na ogladajanime.pl w przeglądarce
- * 2. F12 → Application → Cookies → ogladajanime.pl
- * 3. Skopiuj wartość cookie (zazwyczaj "dle_user_id=XXX; dle_password=YYY" lub podobne)
- * 4. Wklej jako zmienną OA_SESSION_COOKIE na Vercel
- */
-async function fetchOA(path) {
+async function fetchOA(path, { render = false } = {}) {
   const url = path.startsWith('http') ? path : `${BASE_URL}${path}`;
   const scraperKey = process.env.SCRAPER_API_KEY;
   const sessionCookie = process.env.OA_SESSION_COOKIE || '';
@@ -34,13 +25,18 @@ async function fetchOA(path) {
   };
 
   if (scraperKey) {
-    // ScraperAPI z keep_headers=true przekazuje nasze nagłówki (w tym Cookie) do docelowej strony
-    const scraperUrl = `http://api.scraperapi.com?api_key=${scraperKey}&url=${encodeURIComponent(url)}&render=false&country_code=pl&keep_headers=true`;
-    console.log(`[fetchOA] ScraperAPI → ${url}${sessionCookie ? ' (z cookie)' : ' (bez cookie)'}`);
-    const { data } = await axios.get(scraperUrl, {
-      headers,
-      timeout: 30000
+    const params = new URLSearchParams({
+      api_key: scraperKey,
+      url,
+      country_code: 'pl',
+      keep_headers: 'true',
     });
+    // render=true wykonuje JavaScript na stronie (kosztuje 10x requestów)
+    if (render) params.set('render', 'true');
+
+    const scraperUrl = `http://api.scraperapi.com?${params.toString()}`;
+    console.log(`[fetchOA] ScraperAPI${render ? ' (render=true)' : ''} → ${url}`);
+    const { data } = await axios.get(scraperUrl, { headers, timeout: 60000 });
     if (typeof data === 'string') {
       const loggedIn = !data.includes('Zaloguj się aby uzyskać dostęp');
       console.log(`[fetchOA] HTML (${data.length} chars), zalogowany: ${loggedIn}`);
@@ -48,7 +44,6 @@ async function fetchOA(path) {
     return data;
   }
 
-  // Lokalnie – bezpośredni request
   console.log(`[fetchOA] Direct → ${url}`);
   const { data } = await axios.get(url, { headers, timeout: 15000 });
   return data;
