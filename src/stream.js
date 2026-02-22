@@ -109,6 +109,15 @@ async function getEmbedsFromEpisodePage(slug, episode) {
     console.log(`[stream] DEBUG vk.com pos: ${vkIdx}, video_ext pos: ${videoIdx}, iframe pos: ${iframeIdx}`);
     if (vkIdx > -1) console.log(`[stream] VK context: ${rawHtml.substring(Math.max(0, vkIdx-50), vkIdx+200)}`);
     if (iframeIdx > -1) console.log(`[stream] iframe context: ${rawHtml.substring(iframeIdx, iframeIdx+300)}`);
+
+    // Pokaż skrypty zawierające słowa kluczowe związane z playerem
+    $('script').each((i, el) => {
+      const content = $(el).html() || '';
+      if (content.includes('playerFrame') || content.includes('watchepisode') || content.includes('player') && content.includes('episode')) {
+        const preview = content.replace(/\s+/g, ' ').substring(0, 500);
+        console.log(`[stream] Script ${i}: ${preview}`);
+      }
+    });
   }
 
   console.log(`[stream] Found ${embeds.length} embeds for ${slug}/${episode}`);
