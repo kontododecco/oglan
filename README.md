@@ -1,30 +1,40 @@
 # 🎌 OgladajAnime.pl – Stremio Addon
 
-Nieoficjalny addon Stremio dla ogladajanime.pl.
-
-## ⚙️ Wymagane zmienne środowiskowe na Vercel
-
-Wejdź: **Vercel → projekt → Settings → Environment Variables**
+## ⚙️ Zmienne środowiskowe (Vercel → Settings → Environment Variables)
 
 | Zmienna | Opis | Wymagana? |
 |---------|------|-----------|
-| `SCRAPER_API_KEY` | Klucz API z scraperapi.com | ✅ Tak (omija blokadę IP) |
-| `OA_LOGIN` | Login do konta ogladajanime.pl | ✅ Tak (dostęp do playerów) |
-| `OA_PASSWORD` | Hasło do konta ogladajanime.pl | ✅ Tak |
+| `SCRAPER_API_KEY` | Klucz z scraperapi.com | ✅ Tak |
+| `OA_SESSION_COOKIE` | Cookie sesji z ogladajanime.pl | ✅ Tak |
 
-### Dlaczego potrzebne konto OA?
+---
 
-OA wymaga zalogowania żeby oglądać odcinki. Bez konta strona pokazuje listę
-odcinków ale nie udostępnia linków do playerów (komunikat: "Zaloguj się aby
-uzyskać dostęp do wszystkich treści").
+## 🍪 Jak zdobyć OA_SESSION_COOKIE (3 minuty)
 
-**Konto OA jest darmowe** – zarejestruj się na ogladajanime.pl.
+OA wymaga zalogowania żeby oglądać odcinki. Zamiast przekazywać login/hasło
+(które byłyby blokowane przez Vercel), kopiujesz cookie sesji z przeglądarki:
 
-### Jak dodać zmienne na Vercel:
-1. Vercel → twój projekt → **Settings** → **Environment Variables**
-2. Dodaj każdą zmienną osobno (Name + Value)
-3. Kliknij **Save** po każdej
-4. **Redeploy**: Deployments → najnowszy deploy → **...** → **Redeploy**
+**Krok 1:** Zaloguj się na [ogladajanime.pl](https://ogladajanime.pl) w przeglądarce
+
+**Krok 2:** Naciśnij **F12** → zakładka **Application** (Chrome) lub **Storage** (Firefox)
+
+**Krok 3:** W lewym panelu: **Cookies** → **https://ogladajanime.pl**
+
+**Krok 4:** Znajdź i skopiuj wartości tych cookies (kliknij w nazwę, skopiuj pole "Value"):
+- `dle_user_id` – np. `12345`
+- `dle_password` – np. `abc123def456...` (długi hash)
+
+**Krok 5:** Złóż je w jeden string w formacie:
+```
+dle_user_id=12345; dle_password=abc123def456...
+```
+
+**Krok 6:** Wklej jako wartość zmiennej `OA_SESSION_COOKIE` na Vercel
+
+> 💡 **Uwaga:** Cookie wygasa po pewnym czasie (zwykle kilka tygodni/miesięcy).
+> Jeśli addon przestanie działać – powtórz kroki 2-6.
+
+---
 
 ## 🚀 Deploy na Vercel
 
@@ -32,22 +42,18 @@ uzyskać dostęp do wszystkich treści").
 git init && git add . && git commit -m "init"
 git remote add origin https://github.com/TWOJA/repo.git
 git push -u origin main
-# Potem: vercel.com → New Project → wybierz repo → Deploy
-# Dodaj zmienne środowiskowe → Redeploy
+# vercel.com → New Project → wybierz repo → Deploy
+# Dodaj obie zmienne → Redeploy
 ```
 
-## 💻 Uruchomienie lokalne
+Po deployu wejdź na URL projektu i kliknij "Zainstaluj w Stremio".
+
+## 💻 Lokalnie (bez ScraperAPI)
 
 ```bash
-# Utwórz plik .env w katalogu projektu:
-echo "OA_LOGIN=twoj_login" >> .env
-echo "OA_PASSWORD=twoje_haslo" >> .env
-echo "SCRAPER_API_KEY=twoj_klucz" >> .env  # opcjonalne lokalnie
+# Plik .env w katalogu projektu:
+OA_SESSION_COOKIE=dle_user_id=XXX; dle_password=YYY
 
-npm install
-npm start
-# Addon na http://localhost:7000
+npm install && npm start
+# http://localhost:7000
 ```
-
-## Obsługiwane hostingi
-Vidoza, CDA.pl, MP4Upload, Sibnet, YouTube, DoodStream, StreamTape, VOE, FileMoon
